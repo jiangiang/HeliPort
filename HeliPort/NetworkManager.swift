@@ -124,7 +124,8 @@ final class NetworkManager {
                 let networkInfo = NetworkInfo(
                     ssid: ssid,
                     rssi: Int(network.rssi),
-                    bssid: formatBSSID(network.bssid)
+                    bssid: formatBSSID(network.bssid),
+                    channel: Int(network.channel)
                 )
                 networkInfo.auth.security = getSecurityType(network)
                 result.append(networkInfo)
@@ -160,6 +161,35 @@ final class NetworkManager {
                       bssid.3,
                       bssid.4,
                       bssid.5)
+    }
+
+    static func getCurrentNetworkInfo() -> CurrentNetworkInfo {
+        var infoOut = CurrentNetworkInfo()
+        var infoIn = station_info_t()
+
+        guard get_station_info(&infoIn) == KERN_SUCCESS else {
+            return infoOut
+        }
+
+        infoOut.isConnected = true
+        infoOut.ssid = String(ssid: infoIn.ssid)
+        infoOut.bssid = formatBSSID(infoIn.bssid)
+        infoOut.channel = "\(infoIn.channel) (\(infoIn.channel <= 14 ? 2.4 : 5) GHz, \(infoIn.band_width) MHz)"
+        infoOut.rssi = "\(infoIn.rssi) dBm"
+        infoOut.noise = "\(infoIn.noise) dBm"
+        infoOut.txRate = "\(infoIn.rate) Mbps"
+        infoOut.phyMode = infoIn.op_mode.description
+        infoOut.internet = isReachable() ? NSLocalizedString("Reachable") : NSLocalizedString("Unreachable")
+
+        var platformInfo = platform_info_t()
+        if get_platform_info(&platformInfo) {
+            let bsd = String(cCharArray: platformInfo.device_info_str)
+            infoOut.interfaceName = bsd
+            infoOut.ipAddress = getLocalAddress(bsd: bsd) ?? NSLocalizedString("Unknown")
+            infoOut.router = getRouterAddress(bsd: bsd) ?? NSLocalizedString("Unknown")
+        }
+
+        return infoOut
     }
 
     static func scanSavedNetworks() {

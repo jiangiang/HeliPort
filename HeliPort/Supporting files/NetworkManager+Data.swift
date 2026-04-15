@@ -19,21 +19,45 @@ final class NetworkInfo: Codable {
     let ssid: String
     var rssi: Int
     var bssid: String
+    var channel: Int
 
     var auth = NetworkAuth()
 
-    init (ssid: String, rssi: Int = 0, bssid: String = "") {
+    init (ssid: String, rssi: Int = 0, bssid: String = "", channel: Int = 0) {
         self.ssid = ssid
         self.rssi = rssi
         self.bssid = bssid
+        self.channel = channel
     }
 
     var displaySSID: String {
-        guard UserDefaults.standard.bool(forKey: .DefaultsKey.showDuplicateSSIDsByBSSID),
-              !bssid.isEmpty else {
+        var details = [String]()
+        if !bandDescription.isEmpty {
+            details.append(bandDescription)
+        }
+
+        if UserDefaults.standard.bool(forKey: .DefaultsKey.showDuplicateSSIDsByBSSID),
+           !bssid.isEmpty {
+            details.append(bssid)
+        }
+
+        guard !details.isEmpty else {
             return ssid
         }
-        return "\(ssid) (\(bssid))"
+        return "\(ssid) (\(details.joined(separator: ", ")))"
+    }
+
+    var bandDescription: String {
+        guard channel > 0 else { return "" }
+        return channel <= 14 ? "2.4 GHz" : "5 GHz"
+    }
+
+    func matchesAccessPoint(_ other: NetworkInfo?) -> Bool {
+        guard let other else { return false }
+        if !bssid.isEmpty, !other.bssid.isEmpty {
+            return bssid == other.bssid
+        }
+        return ssid == other.ssid
     }
 }
 
@@ -68,4 +92,26 @@ final class NetworkInfoStorageEntity: Codable {
         self.autoJoin = autoJoin
         self.order = order
     }
+}
+
+struct CurrentNetworkInfo {
+    var interfaceName: String = .unavailable
+    var ssid: String = .unavailable
+    var bssid: String = .unavailable
+    var channel: String = .unavailable
+    var rssi: String = .unavailable
+    var noise: String = .unavailable
+    var txRate: String = .unavailable
+    var phyMode: String = .unavailable
+    var ipAddress: String = .unavailable
+    var router: String = .unavailable
+    var internet: String = .unavailable
+    var isConnected = false
+}
+
+private extension String {
+    static let unavailable = NSLocalizedString("Unavailable")
+    static let unknown = NSLocalizedString("Unknown")
+    static let reachable = NSLocalizedString("Reachable")
+    static let unreachable = NSLocalizedString("Unreachable")
 }
