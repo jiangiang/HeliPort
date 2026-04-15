@@ -46,6 +46,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             statusBar.menu = StatusMenuLegacy()
         }
+
+        NetworkManager.scanSavedNetworks()
+        NSWorkspace.shared.notificationCenter.addObserver(self,
+                                                          selector: #selector(systemDidWake),
+                                                          name: NSWorkspace.didWakeNotification,
+                                                          object: nil)
     }
 
     private var drv_info = ioctl_driver_info()
@@ -127,7 +133,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 #endif
     }
 
+    @objc private func systemDidWake(_ notification: Notification) {
+        NetworkManager.scanSavedNetworks()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         Log.debug("Exit")
         api_terminate()
     }
