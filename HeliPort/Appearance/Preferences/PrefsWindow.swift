@@ -39,6 +39,7 @@ class PrefsWindow: NSWindow {
                    defer: flag)
 
         isReleasedWhenClosed = false
+        minSize = NSSize(width: 560, height: 180)
 
         title = .networkPrefs
 
@@ -96,13 +97,14 @@ class PrefsWindow: NSWindow {
             size = NSSize(width: 620, height: 420)
         case .current:
             newView = PrefsCurrentNetworkView()
-            size = NSSize(width: 430, height: 340)
+            size = NSSize(width: 560, height: 340)
         case .general:
             newView = PrefsGeneralView()
-            size = newView!.fittingSize
+            size = NSSize(width: max(newView!.fittingSize.width, minSize.width),
+                          height: newView!.fittingSize.height)
         case .app:
             newView = PrefsAppView()
-            size = NSSize(width: 320, height: 180)
+            size = NSSize(width: 560, height: 180)
         default:
             Log.error("Toolbar Item not implemented: \(identifier)")
         }
