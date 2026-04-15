@@ -22,9 +22,18 @@ final class CredentialsManager {
     private let keychain: Keychain
     private let ssidCache: NSCache = NSCache<NSString, NSSet>()
     private let ssidCacheKey = NSString("savedSSIDs")
+    private let storageCache = NSCache<NSString, NSString>()
 
     private init() {
         keychain = Keychain(service: Bundle.main.bundleIdentifier!)
+    }
+
+    private func invalidateStorageCache(for ssid: String? = nil) {
+        guard let ssid else {
+            storageCache.removeAllObjects()
+            return
+        }
+        storageCache.removeObject(forKey: ssid as NSString)
     }
 
     func save(_ network: NetworkInfo) {
@@ -41,6 +50,7 @@ final class CredentialsManager {
 
         Log.debug("Saving password for network \(network.ssid)")
         try? keychain.comment(entityJson).set(networkAuthJson, key: network.keychainKey)
+        invalidateStorageCache(for: network.keychainKey)
     }
 
     func get(_ network: NetworkInfo) -> NetworkAuth? {
@@ -57,16 +67,28 @@ final class CredentialsManager {
     func remove(_ network: NetworkInfo) {
         Log.debug("Removing \(network.ssid) from keychain")
         try? keychain.remove(network.keychainKey)
+        ssidCache.removeObject(forKey: ssidCacheKey)
+        invalidateStorageCache(for: network.keychainKey)
     }
 
     func getStorageFromSsid(_ ssid: String) -> NetworkInfoStorageEntity? {
+        if let cached = storageCache.object(forKey: ssid as NSString),
+           let jsonData = (cached as String).data(using: .utf8) {
+            return try? JSONDecoder().decode(NetworkInfoStorageEntity.self, from: jsonData)
+        }
+
         guard let attributes = try? keychain.get(ssid, handler: {$0}),
             let json = attributes.comment,
             let jsonData = json.data(using: .utf8) else {
                 return nil
         }
 
-        return try? JSONDecoder().decode(NetworkInfoStorageEntity.self, from: jsonData)
+        guard let entity = try? JSONDecoder().decode(NetworkInfoStorageEntity.self, from: jsonData) else {
+            return nil
+        }
+
+        storageCache.setObject(json as NSString, forKey: ssid as NSString)
+        return entity
     }
 
     func getAuthFromSsid(_ ssid: String) -> NetworkAuth? {
@@ -93,6 +115,7 @@ final class CredentialsManager {
         }
 
         try? keychain.comment(entityJson).set(authJson, key: ssid)
+        invalidateStorageCache(for: ssid)
     }
 
     func setPriority(_ ssid: String, _ priority: Int) {
@@ -109,6 +132,7 @@ final class CredentialsManager {
         }
 
         try? keychain.comment(entityJson).set(authJson, key: ssid)
+        invalidateStorageCache(for: ssid)
     }
 
     func getSavedNetworks() -> [NetworkInfo] {

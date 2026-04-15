@@ -83,10 +83,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let pathComponents = (Bundle.main.bundlePath as NSString).pathComponents
 
 #if DEBUG
-        // Normal users should never use the Debug Version
-        guard pathComponents[pathComponents.count - 2] != "Debug" else {
-            return
-        }
+        return
 #else
         guard pathComponents[pathComponents.count - 2] != "Applications" else {
             return

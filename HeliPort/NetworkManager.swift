@@ -25,6 +25,7 @@ final class NetworkManager {
         ITL80211_SECURITY_WPA2_PERSONAL,
         ITL80211_SECURITY_PERSONAL
     ]
+    private static var autoJoinTimer: DispatchSourceTimer?
 
     static func connect(networkInfo: NetworkInfo, saveNetwork: Bool = false,
                         _ callback: ((_ result: Bool) -> Void)? = nil) {
@@ -141,22 +142,23 @@ final class NetworkManager {
                 Log.debug("No network saved for auto join")
                 return
             }
-            let scanTimer: Timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { timer in
+            autoJoinTimer?.cancel()
+            let scanTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
+            autoJoinTimer = scanTimer
+            scanTimer.schedule(deadline: .now(), repeating: .seconds(5))
+            scanTimer.setEventHandler {
                 NetworkManager.scanNetwork { networkList in
                     let targetNetworks = savedNetworks.filter { networkList.contains($0) }
-                    if targetNetworks.count > 0 {
-                        // This will stop the timer completely
-                        timer.invalidate()
-                        Log.debug("Auto join timer stopped")
-                        connectSavedNetworks(networks: targetNetworks)
+                    guard targetNetworks.count > 0 else {
+                        return
                     }
+                    NetworkManager.autoJoinTimer?.cancel()
+                    NetworkManager.autoJoinTimer = nil
+                    Log.debug("Auto join timer stopped")
+                    connectSavedNetworks(networks: targetNetworks)
                 }
             }
-            // Start executing code inside the timer immediately
-            scanTimer.fire()
-            let currentRunLoop = RunLoop.current
-            currentRunLoop.add(scanTimer, forMode: .common)
-            currentRunLoop.run()
+            scanTimer.resume()
         }
     }
 

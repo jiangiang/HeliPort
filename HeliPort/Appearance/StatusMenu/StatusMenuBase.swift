@@ -184,20 +184,16 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
         (self as? StatusMenuItems)?.setupMenu()
         getDeviceInfo()
 
-        DispatchQueue.global(qos: .default).async {
-            self.statusUpdateTimer = Timer.scheduledTimer(
-                timeInterval: self.statusUpdatePeriod,
-                target: self,
-                selector: #selector(self.updateStatus),
-                userInfo: nil,
-                repeats: true
-            )
+        statusUpdateTimer = Timer(
+            timeInterval: statusUpdatePeriod,
+            target: self,
+            selector: #selector(updateStatus),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(statusUpdateTimer!, forMode: .common)
 
-            self.statusUpdateTimer?.fire()
-            let currentRunLoop = RunLoop.current
-            currentRunLoop.add(self.statusUpdateTimer!, forMode: .common)
-            currentRunLoop.run()
-        }
+        updateStatus()
 
         NSApp.servicesProvider = self
     }
@@ -216,24 +212,22 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         showAllOptions = (NSApp.currentEvent?.modifierFlags.contains(.option)) ?? false
 
-        DispatchQueue.global(qos: .default).async {
-            self.updateStationItems()
-            self.networkListUpdateTimer = Timer.scheduledTimer(
-                timeInterval: self.networkListUpdatePeriod,
-                target: self,
-                selector: #selector(self.updateNetworkList),
-                userInfo: nil,
-                repeats: true
-            )
-            self.networkListUpdateTimer?.fire()
-            let currentRunLoop = RunLoop.current
-            currentRunLoop.add(self.networkListUpdateTimer!, forMode: .common)
-            currentRunLoop.run()
-        }
+        updateStationItems()
+        updateNetworkList()
+        networkListUpdateTimer?.invalidate()
+        networkListUpdateTimer = Timer(
+            timeInterval: networkListUpdatePeriod,
+            target: self,
+            selector: #selector(updateNetworkList),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(networkListUpdateTimer!, forMode: .common)
     }
 
     func menuDidClose(_ menu: NSMenu) {
         networkListUpdateTimer?.invalidate()
+        networkListUpdateTimer = nil
         (menu.highlightedItem?.view as? SelectableMenuItemView)?.isMouseOver = false
     }
 
