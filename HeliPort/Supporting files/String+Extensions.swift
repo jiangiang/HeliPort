@@ -18,6 +18,7 @@ import Foundation
 public extension String {
     enum DefaultsKey {
         static let legacyUI = "legacyUIEnabled"
+        static let showDuplicateSSIDsByBSSID = "showDuplicateSSIDsByBSSID"
     }
 
     init<T>(ssid: T) {

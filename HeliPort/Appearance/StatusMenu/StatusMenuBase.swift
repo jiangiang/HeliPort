@@ -320,7 +320,7 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
             alert.show()
         case .Legacy.openNetworkPrefs, .Modern.wifiSettings:
             preferenceWindow.close()
-            preferenceWindow.show()
+            preferenceWindow.showGeneral()
         case .launchLogin:
             LoginItemManager.setStatus(enabled: !LoginItemManager.isEnabled())
             isAutoLaunch = LoginItemManager.isEnabled()

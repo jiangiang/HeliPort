@@ -117,7 +117,7 @@ class WifiMenuItemViewModern: SelectableMenuItemView, WifiMenuItemView {
 
     public var networkInfo: NetworkInfo {
         willSet(info) {
-            ssidLabel.stringValue = info.ssid
+            ssidLabel.stringValue = info.displaySSID
             layoutSubtreeIfNeeded()
         }
         didSet {

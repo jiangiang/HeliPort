@@ -18,12 +18,22 @@ import Foundation
 final class NetworkInfo: Codable {
     let ssid: String
     var rssi: Int
+    var bssid: String
 
     var auth = NetworkAuth()
 
-    init (ssid: String, rssi: Int = 0) {
+    init (ssid: String, rssi: Int = 0, bssid: String = "") {
         self.ssid = ssid
         self.rssi = rssi
+        self.bssid = bssid
+    }
+
+    var displaySSID: String {
+        guard UserDefaults.standard.bool(forKey: .DefaultsKey.showDuplicateSSIDsByBSSID),
+              !bssid.isEmpty else {
+            return ssid
+        }
+        return "\(ssid) (\(bssid))"
     }
 }
 

@@ -64,6 +64,13 @@ class PrefsWindow: NSWindow {
         center()
     }
 
+    func showGeneral() {
+        previousIdentifier = .none
+        toolbar?.selectedItemIdentifier = .general
+        clickToolbarItem(NSToolbarItem(itemIdentifier: .general))
+        show()
+    }
+
     override func close() {
         super.close()
         self.orderOut(NSApp)

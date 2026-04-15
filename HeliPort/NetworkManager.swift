@@ -94,7 +94,7 @@ final class NetworkManager {
             let savedSSIDs = CredentialsManager.instance.getSavedNetworkSSIDs()
             scanNetwork { result in
                 let known = result.filter { savedSSIDs.contains($0.ssid) }
-                let other = result.subtracting(known)
+                let other = result.filter { !savedSSIDs.contains($0.ssid) }
 
                 DispatchQueue.main.async {
                     callback(known.sorted(by: areInIncreasingOrder),
@@ -104,12 +104,12 @@ final class NetworkManager {
         }
     }
 
-    private static func scanNetwork(callback: @escaping (_ networkInfoList: Set<NetworkInfo>) -> Void) {
+    private static func scanNetwork(callback: @escaping (_ networkInfoList: [NetworkInfo]) -> Void) {
         DispatchQueue.global(qos: .background).async {
             var list = network_info_list_t()
             get_network_list(&list)
 
-            var result = Set<NetworkInfo>()
+            var result = [NetworkInfo]()
             let networks = Mirror(reflecting: list.networks).children.map({ $0.value }).prefix(Int(list.count))
 
             for element in networks {
@@ -123,16 +123,43 @@ final class NetworkManager {
 
                 let networkInfo = NetworkInfo(
                     ssid: ssid,
-                    rssi: Int(network.rssi)
+                    rssi: Int(network.rssi),
+                    bssid: formatBSSID(network.bssid)
                 )
                 networkInfo.auth.security = getSecurityType(network)
-                result.insert(networkInfo)
+                result.append(networkInfo)
             }
 
             DispatchQueue.main.async {
-                callback(result)
+                callback(filterDuplicateSSIDsIfNeeded(result))
             }
         }
+    }
+
+    private static func filterDuplicateSSIDsIfNeeded(_ networks: [NetworkInfo]) -> [NetworkInfo] {
+        guard !UserDefaults.standard.bool(forKey: .DefaultsKey.showDuplicateSSIDsByBSSID) else {
+            return networks
+        }
+
+        var strongestNetworkBySSID = [String: NetworkInfo]()
+        networks.forEach { network in
+            if let savedNetwork = strongestNetworkBySSID[network.ssid],
+               savedNetwork.rssi >= network.rssi {
+                return
+            }
+            strongestNetworkBySSID[network.ssid] = network
+        }
+        return Array(strongestNetworkBySSID.values)
+    }
+
+    private static func formatBSSID(_ bssid: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)) -> String {
+        return String(format: "%02x:%02x:%02x:%02x:%02x:%02x",
+                      bssid.0,
+                      bssid.1,
+                      bssid.2,
+                      bssid.3,
+                      bssid.4,
+                      bssid.5)
     }
 
     static func scanSavedNetworks() {
