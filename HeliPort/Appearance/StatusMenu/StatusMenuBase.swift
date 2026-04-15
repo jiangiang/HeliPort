@@ -281,15 +281,6 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
                 }
             }
 
-            // If not connected, try to connect saved networks
-            var stationInfo = station_info_t()
-            var state: UInt32 = 0
-            var power: Bool = false
-            get_power_state(&power)
-            if get_80211_state(&state) && power &&
-                (state != ITL80211_S_RUN.rawValue || get_station_info(&stationInfo) != KERN_SUCCESS) {
-                NetworkManager.scanSavedNetworks()
-            }
         }
     }
 

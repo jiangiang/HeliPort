@@ -26,6 +26,7 @@ final class NetworkManager {
         ITL80211_SECURITY_PERSONAL
     ]
     private static var autoJoinTimer: DispatchSourceTimer?
+    private static var autoJoinInProgress = false
 
     static func connect(networkInfo: NetworkInfo, saveNetwork: Bool = false,
                         _ callback: ((_ result: Bool) -> Void)? = nil) {
@@ -240,22 +241,100 @@ final class NetworkManager {
             autoJoinTimer = scanTimer
             scanTimer.schedule(deadline: .now(), repeating: .seconds(5))
             scanTimer.setEventHandler {
+                guard !autoJoinInProgress else {
+                    return
+                }
+
+                guard shouldAutoJoinSavedNetwork() else {
+                    return
+                }
+
+                autoJoinInProgress = true
                 NetworkManager.scanNetwork { networkList in
-                    let targetNetworks = savedNetworks.filter { networkList.contains($0) }
+                    let targetNetworks = targetNetworksForAutoJoin(savedNetworks: savedNetworks,
+                                                                  scannedNetworks: networkList)
                     guard targetNetworks.count > 0 else {
+                        autoJoinInProgress = false
                         return
                     }
-                    NetworkManager.autoJoinTimer?.cancel()
-                    NetworkManager.autoJoinTimer = nil
-                    Log.debug("Auto join timer stopped")
-                    connectSavedNetworks(networks: targetNetworks)
+
+                    connectSavedNetworks(networks: targetNetworks) { connected in
+                        autoJoinInProgress = false
+                        if connected {
+                            NetworkManager.autoJoinTimer?.cancel()
+                            NetworkManager.autoJoinTimer = nil
+                            Log.debug("Auto join timer stopped")
+                        }
+                    }
                 }
             }
             scanTimer.resume()
         }
     }
 
-    private static func connectSavedNetworks(networks: [NetworkInfo]) {
+    private static func shouldAutoJoinSavedNetwork() -> Bool {
+        var power = false
+        guard get_power_state(&power), power else {
+            Log.debug("Wi-Fi is not ready for auto join")
+            return false
+        }
+
+        var state: UInt32 = 0
+        guard get_80211_state(&state) else {
+            Log.debug("Could not read Wi-Fi state for auto join")
+            return false
+        }
+
+        guard state == ITL80211_S_RUN.rawValue else {
+            return true
+        }
+
+        var stationInfo = station_info_t()
+        let connected = get_station_info(&stationInfo) == KERN_SUCCESS && !String(ssid: stationInfo.ssid).isEmpty
+        if connected {
+            NetworkManager.autoJoinTimer?.cancel()
+            NetworkManager.autoJoinTimer = nil
+            Log.debug("Already connected, auto join timer stopped")
+        }
+        return !connected
+    }
+
+    private static func targetNetworksForAutoJoin(savedNetworks: [NetworkInfo],
+                                                  scannedNetworks: [NetworkInfo]) -> [NetworkInfo] {
+        var strongestScannedNetworkBySSID = [String: NetworkInfo]()
+        scannedNetworks.forEach { network in
+            if let saved = strongestScannedNetworkBySSID[network.ssid], saved.rssi >= network.rssi {
+                return
+            }
+            strongestScannedNetworkBySSID[network.ssid] = network
+        }
+
+        let matchedNetworks = savedNetworks.compactMap { savedNetwork -> NetworkInfo? in
+            guard let scannedNetwork = strongestScannedNetworkBySSID[savedNetwork.ssid] else {
+                return nil
+            }
+            return scannedNetwork
+        }
+
+        guard UserDefaults.standard.bool(forKey: .DefaultsKey.preferStrongestKnownNetwork) else {
+            return matchedNetworks
+        }
+
+        var savedNetworkOrder = [String: Int]()
+        savedNetworks.enumerated().forEach { index, network in
+            if savedNetworkOrder[network.ssid] == nil {
+                savedNetworkOrder[network.ssid] = index
+            }
+        }
+        return matchedNetworks.sorted { lhs, rhs in
+            if lhs.rssi == rhs.rssi {
+                return (savedNetworkOrder[lhs.ssid] ?? .max) < (savedNetworkOrder[rhs.ssid] ?? .max)
+            }
+            return lhs.rssi > rhs.rssi
+        }
+    }
+
+    private static func connectSavedNetworks(networks: [NetworkInfo], completion: ((Bool) -> Void)? = nil) {
         DispatchQueue.global(qos: .background).async {
             let dispatchSemaphore = DispatchSemaphore(value: 0)
             var connected = false
@@ -265,6 +344,9 @@ final class NetworkManager {
                     dispatchSemaphore.signal()
                 }
                 dispatchSemaphore.wait()
+            }
+            DispatchQueue.main.async {
+                completion?(connected)
             }
         }
     }

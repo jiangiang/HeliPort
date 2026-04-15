@@ -19,6 +19,7 @@ public extension String {
     enum DefaultsKey {
         static let legacyUI = "legacyUIEnabled"
         static let showDuplicateSSIDsByBSSID = "showDuplicateSSIDsByBSSID"
+        static let preferStrongestKnownNetwork = "preferStrongestKnownNetwork"
     }
 
     init<T>(ssid: T) {

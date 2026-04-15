@@ -38,9 +38,15 @@ final class CredentialsManager {
     }
 
     private func getStoredSSIDs() -> [String] {
+        let keychainKeys = keychain.allKeys()
+        if !keychainKeys.isEmpty {
+            return keychainKeys
+        }
+
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Bundle.main.bundleIdentifier!,
+            kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnAttributes as String: true
         ]
@@ -83,6 +89,21 @@ final class CredentialsManager {
         invalidateStorageCache(for: network.keychainKey)
     }
 
+    private func decodeAuth(from data: Data, ssid: String) -> NetworkAuth? {
+        if let auth = try? JSONDecoder().decode(NetworkAuth.self, from: data) {
+            return auth
+        }
+
+        guard let password = String(data: data, encoding: .utf8), !password.isEmpty else {
+            Log.debug("Could not decode stored password for network \(ssid)")
+            return nil
+        }
+
+        let auth = NetworkAuth()
+        auth.password = password
+        return auth
+    }
+
     func get(_ network: NetworkInfo) -> NetworkAuth? {
         guard let password = keychain[string: network.keychainKey],
             let jsonData = password.data(using: .utf8) else {
@@ -91,7 +112,7 @@ final class CredentialsManager {
         }
 
         Log.debug("Loading password for network \(network.ssid)")
-        return try? JSONDecoder().decode(NetworkAuth.self, from: jsonData)
+        return decodeAuth(from: jsonData, ssid: network.ssid)
     }
 
     func remove(_ network: NetworkInfo) {
@@ -128,14 +149,14 @@ final class CredentialsManager {
                 return nil
         }
 
-        return try? JSONDecoder().decode(NetworkAuth.self, from: jsonData)
+        return decodeAuth(from: jsonData, ssid: ssid)
     }
 
     func setAutoJoin(_ ssid: String, _ autoJoin: Bool) {
-        guard let entity = getStorageFromSsid(ssid),
-            let auth = getAuthFromSsid(ssid) else {
+        guard let auth = getAuthFromSsid(ssid) else {
                 return
         }
+        let entity = getStorageFromSsid(ssid) ?? NetworkInfoStorageEntity(NetworkInfo(ssid: ssid))
 
         entity.autoJoin = autoJoin
 
@@ -149,10 +170,10 @@ final class CredentialsManager {
     }
 
     func setPriority(_ ssid: String, _ priority: Int) {
-        guard let entity = getStorageFromSsid(ssid),
-            let auth = getAuthFromSsid(ssid) else {
+        guard let auth = getAuthFromSsid(ssid) else {
                 return
         }
+        let entity = getStorageFromSsid(ssid) ?? NetworkInfoStorageEntity(NetworkInfo(ssid: ssid))
 
         entity.order = priority
 
@@ -166,13 +187,7 @@ final class CredentialsManager {
     }
 
     func getSavedNetworks() -> [NetworkInfo] {
-        return (getStoredSSIDs().compactMap { ssid in
-            return getStorageFromSsid(ssid)
-        } as [NetworkInfoStorageEntity]).filter { entity in
-            entity.autoJoin && entity.version == NetworkInfoStorageEntity.CURRENT_VERSION
-        }.sorted {
-            $0.order < $1.order
-        }.map { entity in
+        return getSavedNetworkEntities(includeAuth: false, autoJoinOnly: true).map { entity in
             entity.network
         }
     }
@@ -187,18 +202,32 @@ final class CredentialsManager {
     }
 
     func getSavedNetworksEntity() -> [NetworkInfoStorageEntity] {
-        return (getStoredSSIDs().compactMap { ssid in
-            return getStorageFromSsid(ssid)
-        } as [NetworkInfoStorageEntity]).filter { entity in
-            entity.version == NetworkInfoStorageEntity.CURRENT_VERSION
-        }.sorted {
-            $0.order < $1.order
-        }.map { entity in
-            guard let auth = getAuthFromSsid(entity.network.ssid) else {
+        return getSavedNetworkEntities(includeAuth: true, autoJoinOnly: false)
+    }
+
+    private func getSavedNetworkEntities(includeAuth: Bool, autoJoinOnly: Bool) -> [NetworkInfoStorageEntity] {
+        return getStoredSSIDs().compactMap { ssid -> NetworkInfoStorageEntity? in
+            if let entity = getStorageFromSsid(ssid),
+               entity.version == NetworkInfoStorageEntity.CURRENT_VERSION {
+                if includeAuth, let auth = getAuthFromSsid(entity.network.ssid) {
+                    entity.network.auth = auth
+                }
                 return entity
             }
-            entity.network.auth = auth
-            return entity
+
+            guard let auth = getAuthFromSsid(ssid) else {
+                return nil
+            }
+
+            let network = NetworkInfo(ssid: ssid)
+            if includeAuth {
+                network.auth = auth
+            }
+            return NetworkInfoStorageEntity(network)
+        }.filter { entity in
+            !autoJoinOnly || entity.autoJoin
+        }.sorted {
+            $0.order < $1.order
         }
     }
 }
