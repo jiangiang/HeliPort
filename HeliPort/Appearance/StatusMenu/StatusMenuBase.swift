@@ -568,7 +568,7 @@ extension String {
         static let wifiOff = NSLocalizedString("Wi-Fi: Off")
         static let joinNetworks = NSLocalizedString("Join Other Network...")
         static let createNetwork = NSLocalizedString("Create Network...")
-        static let openNetworkPrefs = NSLocalizedString("Open Network Preferences...")
+        static let openNetworkPrefs = NSLocalizedString("Settings...")
         static let disconnectNet = NSLocalizedString("Disconnect from ")
     }
 
