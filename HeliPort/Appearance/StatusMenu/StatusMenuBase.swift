@@ -184,20 +184,16 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
         (self as? StatusMenuItems)?.setupMenu()
         getDeviceInfo()
 
-        DispatchQueue.global(qos: .default).async {
-            self.statusUpdateTimer = Timer.scheduledTimer(
-                timeInterval: self.statusUpdatePeriod,
-                target: self,
-                selector: #selector(self.updateStatus),
-                userInfo: nil,
-                repeats: true
-            )
+        statusUpdateTimer = Timer(
+            timeInterval: statusUpdatePeriod,
+            target: self,
+            selector: #selector(updateStatus),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(statusUpdateTimer!, forMode: .common)
 
-            self.statusUpdateTimer?.fire()
-            let currentRunLoop = RunLoop.current
-            currentRunLoop.add(self.statusUpdateTimer!, forMode: .common)
-            currentRunLoop.run()
-        }
+        updateStatus()
 
         NSApp.servicesProvider = self
     }
@@ -216,24 +212,22 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         showAllOptions = (NSApp.currentEvent?.modifierFlags.contains(.option)) ?? false
 
-        DispatchQueue.global(qos: .default).async {
-            self.updateStationItems()
-            self.networkListUpdateTimer = Timer.scheduledTimer(
-                timeInterval: self.networkListUpdatePeriod,
-                target: self,
-                selector: #selector(self.updateNetworkList),
-                userInfo: nil,
-                repeats: true
-            )
-            self.networkListUpdateTimer?.fire()
-            let currentRunLoop = RunLoop.current
-            currentRunLoop.add(self.networkListUpdateTimer!, forMode: .common)
-            currentRunLoop.run()
-        }
+        updateStationItems()
+        updateNetworkList()
+        networkListUpdateTimer?.invalidate()
+        networkListUpdateTimer = Timer(
+            timeInterval: networkListUpdatePeriod,
+            target: self,
+            selector: #selector(updateNetworkList),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(networkListUpdateTimer!, forMode: .common)
     }
 
     func menuDidClose(_ menu: NSMenu) {
         networkListUpdateTimer?.invalidate()
+        networkListUpdateTimer = nil
         (menu.highlightedItem?.view as? SelectableMenuItemView)?.isMouseOver = false
     }
 
@@ -326,7 +320,7 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
             alert.show()
         case .Legacy.openNetworkPrefs, .Modern.wifiSettings:
             preferenceWindow.close()
-            preferenceWindow.show()
+            preferenceWindow.showGeneral()
         case .launchLogin:
             LoginItemManager.setStatus(enabled: !LoginItemManager.isEnabled())
             isAutoLaunch = LoginItemManager.isEnabled()
@@ -363,6 +357,7 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
     struct StationInfo {
         var ssid: String?
         var rssiValue: Int = 0
+        var channelValue: Int = 0
         var ipAddr: String = .unavailable
         var routerAddr: String = .unavailable
         var internet: String = .unavailable
@@ -404,6 +399,7 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
         infoOut.isNetworkConnected = true
         infoOut.ssid = String(ssid: infoIn.ssid)
         infoOut.rssiValue = Int(infoIn.rssi)
+        infoOut.channelValue = Int(infoIn.channel)
 
         guard showAllOptions else { return infoOut }
 
@@ -463,7 +459,10 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
         if !wifiItemView.connected && info.isNetworkConnected {
             for index in self.headerLength ..< self.items.count {
                 if let view = self.items[index].view as? WifiMenuItemView,
-                   view.networkInfo.ssid == info.ssid {
+                   view.networkInfo.matchesAccessPoint(NetworkInfo(ssid: info.ssid ?? "",
+                                                                   rssi: info.rssiValue,
+                                                                   bssid: info.bssid,
+                                                                   channel: info.channelValue)) {
                     self.items[index].isHidden = true
                     self.items[index].isEnabled = false
                     break
@@ -478,9 +477,14 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
 
         isNetworkListEmpty = false
         if let staSSID = info.ssid, wifiItemView.networkInfo.ssid != staSSID {
-            wifiItemView.networkInfo = NetworkInfo(ssid: staSSID, rssi: info.rssiValue)
+            wifiItemView.networkInfo = NetworkInfo(ssid: staSSID,
+                                                   rssi: info.rssiValue,
+                                                   bssid: info.bssid,
+                                                   channel: info.channelValue)
         } else {
             wifiItemView.networkInfo.rssi = info.rssiValue
+            wifiItemView.networkInfo.channel = info.channelValue
+            wifiItemView.networkInfo.bssid = info.bssid
             wifiItemView.updateImages()
         }
     }
@@ -492,7 +496,7 @@ class StatusMenuBase: NSMenu, NSMenuDelegate {
         for info in infoList {
             var enabled = true
 
-            if let staInfo, staInfo.ssid == info.ssid {
+            if info.matchesAccessPoint(staInfo), let staInfo {
                 staInfo.auth.security = info.auth.security
                 (self.currentNetworkItem.view as? WifiMenuItemView)?.updateImages()
                 enabled = false
@@ -574,7 +578,7 @@ extension String {
         static let wifiOff = NSLocalizedString("Wi-Fi: Off")
         static let joinNetworks = NSLocalizedString("Join Other Network...")
         static let createNetwork = NSLocalizedString("Create Network...")
-        static let openNetworkPrefs = NSLocalizedString("Open Network Preferences...")
+        static let openNetworkPrefs = NSLocalizedString("Settings...")
         static let disconnectNet = NSLocalizedString("Disconnect from ")
     }
 

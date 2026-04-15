@@ -64,6 +64,21 @@ class PrefsGeneralView: NSView {
         return checkbox
     }()
 
+    let advancedLabel: NSTextField = {
+        let view = NSTextField(labelWithString: .advanced)
+        view.alignment = .right
+        return view
+    }()
+
+    lazy var showDuplicateSSIDsCheckbox: NSButton = {
+        let checkbox = NSButton(checkboxWithTitle: .showDuplicateSSIDs,
+                                target: self,
+                                action: #selector(self.checkboxChanged(_:)))
+        checkbox.identifier = .showDuplicateSSIDsId
+        checkbox.state = UserDefaults.standard.bool(forKey: .DefaultsKey.showDuplicateSSIDsByBSSID) ? .on : .off
+        return checkbox
+    }()
+
     let gridView: NSGridView = {
         let view = NSGridView()
         view.setContentHuggingPriority(.init(rawValue: 600), for: .horizontal)
@@ -81,6 +96,8 @@ class PrefsGeneralView: NSView {
         gridView.addColumn(with: [autoUpdateCheckbox, autoDownloadCheckbox])
         let appearanceRow = gridView.addRow(with: [appearanceLabel, legacyUICheckbox])
         appearanceRow.topPadding = 5
+        let advancedRow = gridView.addRow(with: [advancedLabel, showDuplicateSSIDsCheckbox])
+        advancedRow.topPadding = 5
 
         addSubview(gridView)
         setupConstraints()
@@ -122,6 +139,8 @@ extension PrefsGeneralView {
                     NSApp.restartApp()
                 }
             }
+        case .showDuplicateSSIDsId:
+            UserDefaults.standard.set(sender.state == .on, forKey: .DefaultsKey.showDuplicateSSIDsByBSSID)
         default:
             break
         }
@@ -133,6 +152,7 @@ private extension NSUserInterfaceItemIdentifier {
     static let autoDownloadId = NSUserInterfaceItemIdentifier(rawValue: "AutoDownloadCheckbox")
 
     static let legacyUIId = NSUserInterfaceItemIdentifier(rawValue: "legacyUICheckbox")
+    static let showDuplicateSSIDsId = NSUserInterfaceItemIdentifier(rawValue: "showDuplicateSSIDsCheckbox")
 }
 
 private extension String {
@@ -142,6 +162,8 @@ private extension String {
 
     static let appearance = NSLocalizedString("Appearance:")
     static let useLegacyUI = NSLocalizedString("Use Legacy UI")
+    static let advanced = NSLocalizedString("Advanced:")
+    static let showDuplicateSSIDs = NSLocalizedString("Show duplicate SSIDs by BSSID")
 
     static let heliportRestart = NSLocalizedString("HeliPort Restart Required")
     static let restartInfoText =

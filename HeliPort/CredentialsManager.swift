@@ -15,6 +15,7 @@
 
 import Foundation
 import KeychainAccess
+import Security
 
 final class CredentialsManager {
     static let instance: CredentialsManager = CredentialsManager()
@@ -22,9 +23,47 @@ final class CredentialsManager {
     private let keychain: Keychain
     private let ssidCache: NSCache = NSCache<NSString, NSSet>()
     private let ssidCacheKey = NSString("savedSSIDs")
+    private let storageCache = NSCache<NSString, NSString>()
 
     private init() {
         keychain = Keychain(service: Bundle.main.bundleIdentifier!)
+    }
+
+    private func invalidateStorageCache(for ssid: String? = nil) {
+        guard let ssid else {
+            storageCache.removeAllObjects()
+            return
+        }
+        storageCache.removeObject(forKey: ssid as NSString)
+    }
+
+    private func getStoredSSIDs() -> [String] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Bundle.main.bundleIdentifier!,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true
+        ]
+
+        if #available(macOS 10.11, *) {
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIAllow
+        }
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        switch status {
+        case errSecSuccess:
+            guard let items = result as? [[String: Any]] else {
+                return []
+            }
+            return items.compactMap { $0[kSecAttrAccount as String] as? String }
+        case errSecItemNotFound:
+            return []
+        default:
+            Log.error("Failed to enumerate saved networks: \(status)")
+            return []
+        }
     }
 
     func save(_ network: NetworkInfo) {
@@ -41,6 +80,7 @@ final class CredentialsManager {
 
         Log.debug("Saving password for network \(network.ssid)")
         try? keychain.comment(entityJson).set(networkAuthJson, key: network.keychainKey)
+        invalidateStorageCache(for: network.keychainKey)
     }
 
     func get(_ network: NetworkInfo) -> NetworkAuth? {
@@ -57,16 +97,28 @@ final class CredentialsManager {
     func remove(_ network: NetworkInfo) {
         Log.debug("Removing \(network.ssid) from keychain")
         try? keychain.remove(network.keychainKey)
+        ssidCache.removeObject(forKey: ssidCacheKey)
+        invalidateStorageCache(for: network.keychainKey)
     }
 
     func getStorageFromSsid(_ ssid: String) -> NetworkInfoStorageEntity? {
+        if let cached = storageCache.object(forKey: ssid as NSString),
+           let jsonData = (cached as String).data(using: .utf8) {
+            return try? JSONDecoder().decode(NetworkInfoStorageEntity.self, from: jsonData)
+        }
+
         guard let attributes = try? keychain.get(ssid, handler: {$0}),
             let json = attributes.comment,
             let jsonData = json.data(using: .utf8) else {
                 return nil
         }
 
-        return try? JSONDecoder().decode(NetworkInfoStorageEntity.self, from: jsonData)
+        guard let entity = try? JSONDecoder().decode(NetworkInfoStorageEntity.self, from: jsonData) else {
+            return nil
+        }
+
+        storageCache.setObject(json as NSString, forKey: ssid as NSString)
+        return entity
     }
 
     func getAuthFromSsid(_ ssid: String) -> NetworkAuth? {
@@ -93,6 +145,7 @@ final class CredentialsManager {
         }
 
         try? keychain.comment(entityJson).set(authJson, key: ssid)
+        invalidateStorageCache(for: ssid)
     }
 
     func setPriority(_ ssid: String, _ priority: Int) {
@@ -109,10 +162,11 @@ final class CredentialsManager {
         }
 
         try? keychain.comment(entityJson).set(authJson, key: ssid)
+        invalidateStorageCache(for: ssid)
     }
 
     func getSavedNetworks() -> [NetworkInfo] {
-        return (keychain.allKeys().compactMap { ssid in
+        return (getStoredSSIDs().compactMap { ssid in
             return getStorageFromSsid(ssid)
         } as [NetworkInfoStorageEntity]).filter { entity in
             entity.autoJoin && entity.version == NetworkInfoStorageEntity.CURRENT_VERSION
@@ -127,13 +181,13 @@ final class CredentialsManager {
         if let cached = ssidCache.object(forKey: ssidCacheKey) as? Set<String> {
             return cached
         }
-        let savedSSIDs = Set(keychain.allKeys())
+        let savedSSIDs = Set(getStoredSSIDs())
         ssidCache.setObject(savedSSIDs as NSSet, forKey: ssidCacheKey)
         return savedSSIDs
     }
 
     func getSavedNetworksEntity() -> [NetworkInfoStorageEntity] {
-        return (keychain.allKeys().compactMap { ssid in
+        return (getStoredSSIDs().compactMap { ssid in
             return getStorageFromSsid(ssid)
         } as [NetworkInfoStorageEntity]).filter { entity in
             entity.version == NetworkInfoStorageEntity.CURRENT_VERSION

@@ -39,6 +39,7 @@ class PrefsWindow: NSWindow {
                    defer: flag)
 
         isReleasedWhenClosed = false
+        minSize = NSSize(width: 560, height: 180)
 
         title = .networkPrefs
 
@@ -47,6 +48,8 @@ class PrefsWindow: NSWindow {
         toolbar!.displayMode = .iconAndLabel
         toolbar!.insertItem(withItemIdentifier: .general, at: 0)
         toolbar!.insertItem(withItemIdentifier: .networks, at: 1)
+        toolbar!.insertItem(withItemIdentifier: .current, at: 2)
+        toolbar!.insertItem(withItemIdentifier: .app, at: 3)
         toolbar!.selectedItemIdentifier = .general
 
         if #available(OSX 11.0, *) {
@@ -62,6 +65,13 @@ class PrefsWindow: NSWindow {
         NSApplication.shared.activate(ignoringOtherApps: true)
         makeKeyAndOrderFront(nil)
         center()
+    }
+
+    func showGeneral() {
+        previousIdentifier = .none
+        toolbar?.selectedItemIdentifier = .general
+        clickToolbarItem(NSToolbarItem(itemIdentifier: .general))
+        show()
     }
 
     override func close() {
@@ -85,9 +95,16 @@ class PrefsWindow: NSWindow {
         case .networks:
             newView = PrefsSavedNetworksView()
             size = NSSize(width: 620, height: 420)
+        case .current:
+            newView = PrefsCurrentNetworkView()
+            size = NSSize(width: 560, height: 340)
         case .general:
             newView = PrefsGeneralView()
-            size = newView!.fittingSize
+            size = NSSize(width: max(newView!.fittingSize.width, minSize.width),
+                          height: newView!.fittingSize.height)
+        case .app:
+            newView = PrefsAppView()
+            size = NSSize(width: 560, height: 180)
         default:
             Log.error("Toolbar Item not implemented: \(identifier)")
         }
@@ -106,15 +123,15 @@ class PrefsWindow: NSWindow {
 extension PrefsWindow: NSToolbarDelegate {
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        return [.general, .networks]
+        return [.general, .networks, .current, .app]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        return [.general, .networks]
+        return [.general, .networks, .current, .app]
     }
 
     func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        return [.general, .networks]
+        return [.general, .networks, .current, .app]
     }
 
     func toolbar(_ toolbar: NSToolbar,
@@ -136,6 +153,17 @@ extension PrefsWindow: NSToolbarDelegate {
             }
             toolbarItem.isEnabled = true
             return toolbarItem
+        case .current:
+            toolbarItem.label = .current
+            toolbarItem.paletteLabel = .current
+            if #available(OSX 11.0, *) {
+                toolbarItem.image = NSImage(systemSymbolName: "dot.radiowaves.left.and.right",
+                                            accessibilityDescription: .current)
+            } else {
+                toolbarItem.image = #imageLiteral(resourceName: "WiFi")
+            }
+            toolbarItem.isEnabled = true
+            return toolbarItem
         case .general:
             toolbarItem.label = .general
             toolbarItem.paletteLabel = .general
@@ -143,6 +171,16 @@ extension PrefsWindow: NSToolbarDelegate {
                 toolbarItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: .general)
             } else {
                 toolbarItem.image = NSImage(named: NSImage.preferencesGeneralName)
+            }
+            toolbarItem.isEnabled = true
+            return toolbarItem
+        case .app:
+            toolbarItem.label = .app
+            toolbarItem.paletteLabel = .app
+            if #available(OSX 11.0, *) {
+                toolbarItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: .app)
+            } else {
+                toolbarItem.image = NSImage(named: NSImage.stopProgressTemplateName)
             }
             toolbarItem.isEnabled = true
             return toolbarItem
@@ -156,7 +194,9 @@ extension PrefsWindow: NSToolbarDelegate {
 
 private extension NSToolbarItem.Identifier {
     static let networks = NSToolbarItem.Identifier("WiFiNetworks")
+    static let current = NSToolbarItem.Identifier("CurrentWiFi")
     static let general = NSToolbarItem.Identifier("General")
+    static let app = NSToolbarItem.Identifier("App")
     static let none = NSToolbarItem.Identifier("none")
 }
 
@@ -165,5 +205,180 @@ private extension NSToolbarItem.Identifier {
 private extension String {
     static let networkPrefs = NSLocalizedString("Network Preferences")
     static let networks = NSLocalizedString("Networks")
+    static let current = NSLocalizedString("Current")
     static let general = NSLocalizedString("General")
+    static let app = NSLocalizedString("App")
+}
+
+final class PrefsCurrentNetworkView: NSView {
+    private let titleLabel = NSTextField(labelWithString: .currentNetwork)
+    private let statusLabel = NSTextField(labelWithString: .notConnected)
+    private let gridView: NSGridView = {
+        let view = NSGridView()
+        view.rowSpacing = 6
+        view.columnSpacing = 12
+        return view
+    }()
+    private var refreshTimer: Timer?
+    private var valueLabels = [String: NSTextField]()
+
+    convenience init() {
+        self.init(frame: .zero)
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        let rows: [(String, String)] = [
+            (.interfaceName, "interface"),
+            (.networkName, "ssid"),
+            (.bssid, "bssid"),
+            (.channel, "channel"),
+            (.rssi, "rssi"),
+            (.noise, "noise"),
+            (.txRate, "txRate"),
+            (.phyMode, "phyMode"),
+            (.ipAddress, "ipAddress"),
+            (.router, "router"),
+            (.internet, "internet")
+        ]
+
+        rows.forEach { title, key in
+            let keyLabel = NSTextField(labelWithString: title)
+            keyLabel.alignment = .right
+            let valueLabel = NSTextField(labelWithString: .unavailableValue)
+            valueLabel.lineBreakMode = .byTruncatingMiddle
+            valueLabels[key] = valueLabel
+            gridView.addRow(with: [keyLabel, valueLabel])
+        }
+
+        addSubview(titleLabel)
+        addSubview(statusLabel)
+        addSubview(gridView)
+        setupConstraints()
+        refresh()
+
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+        if let refreshTimer {
+            RunLoop.main.add(refreshTimer, forMode: .common)
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        refreshTimer?.invalidate()
+    }
+
+    private func setupConstraints() {
+        subviews.forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+
+        let inset: CGFloat = 20
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: inset),
+
+            statusLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            statusLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+
+            gridView.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            gridView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 12),
+            gridView.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -inset),
+            gridView.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -inset)
+        ])
+    }
+
+    private func refresh() {
+        DispatchQueue.global(qos: .background).async {
+            let info = NetworkManager.getCurrentNetworkInfo()
+            DispatchQueue.main.async {
+                self.statusLabel.stringValue = info.isConnected ? .connected : .notConnected
+                self.gridView.isHidden = !info.isConnected
+                guard info.isConnected else { return }
+                self.valueLabels["interface"]?.stringValue = info.interfaceName
+                self.valueLabels["ssid"]?.stringValue = info.ssid
+                self.valueLabels["bssid"]?.stringValue = info.bssid
+                self.valueLabels["channel"]?.stringValue = info.channel
+                self.valueLabels["rssi"]?.stringValue = info.rssi
+                self.valueLabels["noise"]?.stringValue = info.noise
+                self.valueLabels["txRate"]?.stringValue = info.txRate
+                self.valueLabels["phyMode"]?.stringValue = info.phyMode
+                self.valueLabels["ipAddress"]?.stringValue = info.ipAddress
+                self.valueLabels["router"]?.stringValue = info.router
+                self.valueLabels["internet"]?.stringValue = info.internet
+            }
+        }
+    }
+}
+
+private extension String {
+    static let currentNetwork = NSLocalizedString("Current Network:")
+    static let notConnected = NSLocalizedString("Not connected")
+    static let connected = NSLocalizedString("Connected")
+    static let unavailableValue = NSLocalizedString("Unavailable")
+    static let interfaceName = NSLocalizedString("Interface:")
+    static let networkName = NSLocalizedString("Network:")
+    static let bssid = NSLocalizedString("BSSID:")
+    static let channel = NSLocalizedString("Channel:")
+    static let rssi = NSLocalizedString("RSSI:")
+    static let noise = NSLocalizedString("Noise:")
+    static let txRate = NSLocalizedString("Tx Rate:")
+    static let phyMode = NSLocalizedString("PHY Mode:")
+    static let ipAddress = NSLocalizedString("IP Address:")
+    static let router = NSLocalizedString("Router:")
+    static let internet = NSLocalizedString("Internet:")
+}
+
+final class PrefsAppView: NSView {
+    private let titleLabel = NSTextField(labelWithString: .appActions)
+    private let quitButton: NSButton = {
+        let button = NSButton(title: .quitHeliport, target: nil, action: nil)
+        button.bezelStyle = .rounded
+        return button
+    }()
+
+    convenience init() {
+        self.init(frame: .zero)
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        quitButton.target = self
+        quitButton.action = #selector(quitApp)
+
+        addSubview(titleLabel)
+        addSubview(quitButton)
+        setupConstraints()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupConstraints() {
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        quitButton.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 20),
+
+            quitButton.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            quitButton.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 16)
+        ])
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
+    }
+}
+
+private extension String {
+    static let appActions = NSLocalizedString("App Actions")
+    static let quitHeliport = NSLocalizedString("Quit HeliPort")
 }

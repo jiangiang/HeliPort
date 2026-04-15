@@ -25,6 +25,7 @@ final class NetworkManager {
         ITL80211_SECURITY_WPA2_PERSONAL,
         ITL80211_SECURITY_PERSONAL
     ]
+    private static var autoJoinTimer: DispatchSourceTimer?
 
     static func connect(networkInfo: NetworkInfo, saveNetwork: Bool = false,
                         _ callback: ((_ result: Bool) -> Void)? = nil) {
@@ -93,7 +94,7 @@ final class NetworkManager {
             let savedSSIDs = CredentialsManager.instance.getSavedNetworkSSIDs()
             scanNetwork { result in
                 let known = result.filter { savedSSIDs.contains($0.ssid) }
-                let other = result.subtracting(known)
+                let other = result.filter { !savedSSIDs.contains($0.ssid) }
 
                 DispatchQueue.main.async {
                     callback(known.sorted(by: areInIncreasingOrder),
@@ -103,12 +104,12 @@ final class NetworkManager {
         }
     }
 
-    private static func scanNetwork(callback: @escaping (_ networkInfoList: Set<NetworkInfo>) -> Void) {
+    private static func scanNetwork(callback: @escaping (_ networkInfoList: [NetworkInfo]) -> Void) {
         DispatchQueue.global(qos: .background).async {
             var list = network_info_list_t()
             get_network_list(&list)
 
-            var result = Set<NetworkInfo>()
+            var result = [NetworkInfo]()
             let networks = Mirror(reflecting: list.networks).children.map({ $0.value }).prefix(Int(list.count))
 
             for element in networks {
@@ -122,16 +123,109 @@ final class NetworkManager {
 
                 let networkInfo = NetworkInfo(
                     ssid: ssid,
-                    rssi: Int(network.rssi)
+                    rssi: Int(network.rssi),
+                    bssid: formatBSSID(network.bssid),
+                    channel: Int(network.channel)
                 )
                 networkInfo.auth.security = getSecurityType(network)
-                result.insert(networkInfo)
+                result.append(networkInfo)
             }
 
+            let filteredResult = filterDuplicateSSIDsIfNeeded(result)
             DispatchQueue.main.async {
-                callback(result)
+                callback(filteredResult)
             }
         }
+    }
+
+    private static func filterDuplicateSSIDsIfNeeded(_ networks: [NetworkInfo]) -> [NetworkInfo] {
+        guard !UserDefaults.standard.bool(forKey: .DefaultsKey.showDuplicateSSIDsByBSSID) else {
+            return networks
+        }
+
+        let connectedAccessPoint = getConnectedAccessPoint()
+        var strongestNetworkBySSID = [String: NetworkInfo]()
+        networks.forEach { network in
+            if let connectedAccessPoint,
+               network.ssid == connectedAccessPoint.ssid,
+               network.matchesAccessPoint(connectedAccessPoint) {
+                strongestNetworkBySSID[network.ssid] = network
+                return
+            }
+
+            if let savedNetwork = strongestNetworkBySSID[network.ssid] {
+                if let connectedAccessPoint,
+                   savedNetwork.ssid == connectedAccessPoint.ssid,
+                   savedNetwork.matchesAccessPoint(connectedAccessPoint) {
+                    return
+                }
+
+                if savedNetwork.rssi >= network.rssi {
+                    return
+                }
+            }
+
+            strongestNetworkBySSID[network.ssid] = network
+        }
+        return Array(strongestNetworkBySSID.values)
+    }
+
+    private static func getConnectedAccessPoint() -> NetworkInfo? {
+        var info = station_info_t()
+        guard get_station_info(&info) == KERN_SUCCESS else {
+            return nil
+        }
+
+        let ssid = String(ssid: info.ssid)
+        guard !ssid.isEmpty else {
+            return nil
+        }
+
+        return NetworkInfo(
+            ssid: ssid,
+            rssi: Int(info.rssi),
+            bssid: formatBSSID(info.bssid),
+            channel: Int(info.channel)
+        )
+    }
+
+    private static func formatBSSID(_ bssid: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)) -> String {
+        return String(format: "%02x:%02x:%02x:%02x:%02x:%02x",
+                      bssid.0,
+                      bssid.1,
+                      bssid.2,
+                      bssid.3,
+                      bssid.4,
+                      bssid.5)
+    }
+
+    static func getCurrentNetworkInfo() -> CurrentNetworkInfo {
+        var infoOut = CurrentNetworkInfo()
+        var infoIn = station_info_t()
+
+        guard get_station_info(&infoIn) == KERN_SUCCESS else {
+            return infoOut
+        }
+
+        infoOut.isConnected = true
+        infoOut.ssid = String(ssid: infoIn.ssid)
+        infoOut.bssid = formatBSSID(infoIn.bssid)
+        infoOut.channel = "\(infoIn.channel) (\(infoIn.channel <= 14 ? 2.4 : 5) GHz, \(infoIn.band_width) MHz)"
+        infoOut.rssi = "\(infoIn.rssi) dBm"
+        infoOut.noise = "\(infoIn.noise) dBm"
+        infoOut.txRate = "\(infoIn.rate) Mbps"
+        infoOut.phyMode = infoIn.op_mode.description
+        infoOut.internet = isReachable() ? NSLocalizedString("Reachable") : NSLocalizedString("Unreachable")
+
+        var platformInfo = platform_info_t()
+        if get_platform_info(&platformInfo) {
+            let bsd = String(cCharArray: platformInfo.device_info_str)
+            infoOut.interfaceName = bsd
+            infoOut.ipAddress = getLocalAddress(bsd: bsd) ?? NSLocalizedString("Unknown")
+            infoOut.router = getRouterAddress(bsd: bsd) ?? NSLocalizedString("Unknown")
+        }
+
+        return infoOut
     }
 
     static func scanSavedNetworks() {
@@ -141,22 +235,23 @@ final class NetworkManager {
                 Log.debug("No network saved for auto join")
                 return
             }
-            let scanTimer: Timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { timer in
+            autoJoinTimer?.cancel()
+            let scanTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
+            autoJoinTimer = scanTimer
+            scanTimer.schedule(deadline: .now(), repeating: .seconds(5))
+            scanTimer.setEventHandler {
                 NetworkManager.scanNetwork { networkList in
                     let targetNetworks = savedNetworks.filter { networkList.contains($0) }
-                    if targetNetworks.count > 0 {
-                        // This will stop the timer completely
-                        timer.invalidate()
-                        Log.debug("Auto join timer stopped")
-                        connectSavedNetworks(networks: targetNetworks)
+                    guard targetNetworks.count > 0 else {
+                        return
                     }
+                    NetworkManager.autoJoinTimer?.cancel()
+                    NetworkManager.autoJoinTimer = nil
+                    Log.debug("Auto join timer stopped")
+                    connectSavedNetworks(networks: targetNetworks)
                 }
             }
-            // Start executing code inside the timer immediately
-            scanTimer.fire()
-            let currentRunLoop = RunLoop.current
-            currentRunLoop.add(scanTimer, forMode: .common)
-            currentRunLoop.run()
+            scanTimer.resume()
         }
     }
 

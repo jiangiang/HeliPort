@@ -74,8 +74,11 @@ class StatusBarIcon {
         guard timer == nil else { return }
         tickIndex = 0
         tickDirection = 1
-        DispatchQueue.global(qos: .default).async {
-            self.timer = Timer.scheduledTimer(
+        DispatchQueue.main.async {
+            guard self.timer == nil else {
+                return
+            }
+            self.timer = Timer(
                 timeInterval: 0.3,
                 target: self,
                 selector: #selector(self.tick),
@@ -83,8 +86,7 @@ class StatusBarIcon {
                 repeats: true
             )
             self.timer?.fire()
-            RunLoop.current.add(self.timer!, forMode: .common)
-            RunLoop.current.run()
+            RunLoop.main.add(self.timer!, forMode: .common)
         }
     }
 
