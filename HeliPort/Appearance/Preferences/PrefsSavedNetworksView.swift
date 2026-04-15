@@ -20,6 +20,7 @@ class PrefsSavedNetworksView: NSView {
     // MARK: Saved networks array
 
     private var savedNetworks: [NetworkInfoStorageEntity] = []
+    private var activeObserver: NSObjectProtocol?
 
     // MARK: Properties
 
@@ -115,18 +116,25 @@ class PrefsSavedNetworksView: NSView {
         addSubview(orderItemsLabel)
 
         setupConstraints()
+        reloadSavedNetworks()
 
-        DispatchQueue.global(qos: .background).async {
-            self.savedNetworks = CredentialsManager.instance.getSavedNetworksEntity()
-            DispatchQueue.main.async {
-                self.tableView.reloadData()
-                NSApplication.shared.activate(ignoringOtherApps: true)
-            }
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadSavedNetworks()
         }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let activeObserver {
+            NotificationCenter.default.removeObserver(activeObserver)
+        }
     }
 
     private func setupConstraints() {
@@ -146,6 +154,18 @@ class PrefsSavedNetworksView: NSView {
 
         orderItemsLabel.leadingAnchor.constraint(equalTo: modifyItemSegment.trailingAnchor, constant: 4).isActive = true
         orderItemsLabel.centerYAnchor.constraint(equalTo: modifyItemSegment.centerYAnchor).isActive = true
+    }
+
+    private func reloadSavedNetworks() {
+        DispatchQueue.global(qos: .background).async {
+            let savedNetworks = CredentialsManager.instance.getSavedNetworksEntity()
+            DispatchQueue.main.async {
+                self.savedNetworks = savedNetworks
+                self.tableView.reloadData()
+                self.modifyItemSegment.setEnabled(false, forSegment: .remove)
+                self.modifyItemSegment.setEnabled(false, forSegment: .view)
+            }
+        }
     }
 
     private func updateNetworkPriority() {
