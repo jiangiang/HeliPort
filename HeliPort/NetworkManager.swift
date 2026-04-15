@@ -131,8 +131,9 @@ final class NetworkManager {
                 result.append(networkInfo)
             }
 
+            let filteredResult = filterDuplicateSSIDsIfNeeded(result)
             DispatchQueue.main.async {
-                callback(filterDuplicateSSIDsIfNeeded(result))
+                callback(filteredResult)
             }
         }
     }
@@ -142,15 +143,50 @@ final class NetworkManager {
             return networks
         }
 
+        let connectedAccessPoint = getConnectedAccessPoint()
         var strongestNetworkBySSID = [String: NetworkInfo]()
         networks.forEach { network in
-            if let savedNetwork = strongestNetworkBySSID[network.ssid],
-               savedNetwork.rssi >= network.rssi {
+            if let connectedAccessPoint,
+               network.ssid == connectedAccessPoint.ssid,
+               network.matchesAccessPoint(connectedAccessPoint) {
+                strongestNetworkBySSID[network.ssid] = network
                 return
             }
+
+            if let savedNetwork = strongestNetworkBySSID[network.ssid] {
+                if let connectedAccessPoint,
+                   savedNetwork.ssid == connectedAccessPoint.ssid,
+                   savedNetwork.matchesAccessPoint(connectedAccessPoint) {
+                    return
+                }
+
+                if savedNetwork.rssi >= network.rssi {
+                    return
+                }
+            }
+
             strongestNetworkBySSID[network.ssid] = network
         }
         return Array(strongestNetworkBySSID.values)
+    }
+
+    private static func getConnectedAccessPoint() -> NetworkInfo? {
+        var info = station_info_t()
+        guard get_station_info(&info) == KERN_SUCCESS else {
+            return nil
+        }
+
+        let ssid = String(ssid: info.ssid)
+        guard !ssid.isEmpty else {
+            return nil
+        }
+
+        return NetworkInfo(
+            ssid: ssid,
+            rssi: Int(info.rssi),
+            bssid: formatBSSID(info.bssid),
+            channel: Int(info.channel)
+        )
     }
 
     private static func formatBSSID(_ bssid: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)) -> String {
